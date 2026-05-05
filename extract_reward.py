@@ -40,7 +40,7 @@ def load_frames_input(
     video_or_array_path: str,
     *,
     fps: float = 1.0,
-    max_frames: int = 512,
+    max_frames: int = 20,
 ) -> np.ndarray:
     """Load frames from a video path/URL or .npy/.npz file. Returns uint8 (T, H, W, C)."""
     if video_or_array_path.endswith(".npy"):
@@ -134,6 +134,13 @@ def compute_rewards_per_frame_local(
     return progress_array, success_array
 
 
+def set_config_max_frames(exp_config, max_frames: int) -> None:
+    """Keep the loaded model experiment config aligned with inference frame sampling."""
+    if not hasattr(exp_config, "data") or exp_config.data is None:
+        raise ValueError("Loaded model config does not contain a data section.")
+    exp_config.data.max_frames = int(max_frames)
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(
         description="Run RBM inference locally: load model from HuggingFace and compute per-frame progress and success.",
@@ -144,7 +151,7 @@ def main() -> None:
     
     parser.add_argument("--task", required=True, help="Task instruction for the trajectory")
     parser.add_argument("--fps", type=float, default=1.0, help="FPS when sampling from video (default: 1.0)")
-    parser.add_argument("--max-frames", type=int, default=512, help="Max frames to extract from video (default: 512)")
+    parser.add_argument("--max-frames", type=int, default=20, help="Max frames to extract from video (default: 20)")
     parser.add_argument(
         "--success-threshold",
         type=float,
@@ -168,6 +175,7 @@ def main() -> None:
         model_path=model_path,
         device=device,
     )
+    set_config_max_frames(exp_config, int(args.max_frames))
     reward_model.eval()
     for idx,video in enumerate(video_files,start=1):
         out_path = Path(args.out) if args.out is not None else video.with_name(video.stem + "_rewards.npy")
