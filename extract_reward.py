@@ -4,6 +4,7 @@ from pathlib import Path
 
 
 import argparse
+import decord
 import json
 from pathlib import Path
 from typing import Optional, Tuple
@@ -14,9 +15,23 @@ import torch
 
 from robometer.data.dataset_types import ProgressSample, Trajectory
 from robometer.evals.eval_server import compute_batch_outputs
-from robometer.evals.eval_viz_utils import create_combined_progress_success_plot, extract_frames
+from robometer.evals.eval_viz_utils import create_combined_progress_success_plot
 from robometer.utils.save import load_model_from_hf
 from robometer.utils.setup_utils import setup_batch_collator
+
+
+def extract_uniform_frames(video_path: str, num_frames: int) -> np.ndarray:
+    """Extract exactly num_frames uniformly across a video, repeating indices for very short videos."""
+    vr = decord.VideoReader(video_path, num_threads=1)
+    total_frames = len(vr)
+    if total_frames <= 0:
+        raise RuntimeError(f"Could not read frames from video: {video_path}")
+
+    frame_indices = np.linspace(0, total_frames - 1, int(num_frames), dtype=int).tolist()
+    frames_array = vr.get_batch(frame_indices).asnumpy()
+    del vr
+    return frames_array
+
 
 def batch_process_videos(video_dir: str, model_path: str, default_task: str):
     dir_path=Path(video_dir)
@@ -54,7 +69,7 @@ def load_frames_input(
             else:
                 frames_array = next(iter(npz.values())).copy()
     else:
-        frames_array = extract_frames(video_or_array_path, fps=fps, max_frames=max_frames)
+        frames_array = extract_uniform_frames(video_or_array_path, num_frames=max_frames)
         if frames_array is None or frames_array.size == 0:
             raise RuntimeError("Could not extract frames from video.")
 
@@ -134,11 +149,15 @@ def compute_rewards_per_frame_local(
     return progress_array, success_array
 
 
-def set_config_max_frames(exp_config, max_frames: int) -> None:
-    """Keep the loaded model experiment config aligned with inference frame sampling."""
+def configure_inference_frames(exp_config, reward_model, max_frames: int) -> None:
+    """Keep inference config aligned with frame sampling and request one prediction per frame."""
     if not hasattr(exp_config, "data") or exp_config.data is None:
         raise ValueError("Loaded model config does not contain a data section.")
     exp_config.data.max_frames = int(max_frames)
+    exp_config.data.use_multi_image = True
+    exp_config.model.use_multi_image = True
+    reward_model.use_multi_image = True
+    reward_model.model_config.use_multi_image = True
 
 
 def main() -> None:
@@ -175,7 +194,7 @@ def main() -> None:
         model_path=model_path,
         device=device,
     )
-    set_config_max_frames(exp_config, int(args.max_frames))
+    configure_inference_frames(exp_config, reward_model, int(args.max_frames))
     reward_model.eval()
     for idx,video in enumerate(video_files,start=1):
         out_path = Path(args.out) if args.out is not None else video.with_name(video.stem + "_rewards.npy")
