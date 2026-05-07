@@ -12,6 +12,7 @@ from typing import Optional, Tuple
 import matplotlib.pyplot as plt
 import numpy as np
 import torch
+from matplotlib.ticker import FuncFormatter
 
 from robometer.data.dataset_types import ProgressSample, Trajectory
 from robometer.evals.eval_server import compute_batch_outputs
@@ -170,6 +171,35 @@ def configure_inference_frames(exp_config, reward_model, max_frames: int) -> Non
     reward_model.model_config.use_multi_image = True
 
 
+def align_times_to_predictions(frame_times: np.ndarray, num_predictions: int) -> np.ndarray:
+    """Return x-axis seconds aligned to prediction count while covering the sampled video span."""
+    if num_predictions <= 0:
+        return np.array([], dtype=np.float32)
+    if len(frame_times) == num_predictions:
+        return frame_times
+    if len(frame_times) == 0:
+        return np.arange(num_predictions, dtype=np.float32)
+    if len(frame_times) == 1:
+        return np.full(num_predictions, float(frame_times[0]), dtype=np.float32)
+    return np.linspace(float(frame_times[0]), float(frame_times[-1]), num_predictions, dtype=np.float32)
+
+
+def set_plot_x_axis_to_seconds(fig, x_values: np.ndarray) -> None:
+    """Replace frame-index x data in the progress/success plot with video seconds."""
+    if len(x_values) == 0:
+        return
+    formatter = FuncFormatter(lambda value, _: f"{value:.1f}s")
+    for ax in fig.axes:
+        for line in ax.lines:
+            if len(line.get_xdata()) == len(x_values):
+                line.set_xdata(x_values)
+        ax.set_xlim(float(x_values[0]), float(x_values[-1]))
+        ax.set_xlabel("Video time (s)")
+        ax.xaxis.set_major_formatter(formatter)
+        ax.relim()
+        ax.autoscale_view(scalex=False, scaley=True)
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(
         description="Run RBM inference locally: load model from HuggingFace and compute per-frame progress and success.",
@@ -231,16 +261,16 @@ def main() -> None:
 
         show_success = success_probs.size > 0 and success_probs.size == rewards.size
         success_binary = (success_probs > float(args.success_threshold)).astype(np.int32) if show_success else None
+        plot_times = align_times_to_predictions(frame_times, rewards.size)
         fig = create_combined_progress_success_plot(
             progress_pred=rewards,
             num_frames=int(frames.shape[0]),
             success_binary=success_binary,
             success_probs=success_probs if show_success else None,
             success_labels=None,
-            x_values=frame_times[: rewards.size],
-            x_label="Video time (s)",
             title=f"Progress/Success — {video_path.name}",
         )
+        set_plot_x_axis_to_seconds(fig, plot_times)
         plot_path = out_path.with_name(out_path.stem + "_progress_success.png")
         fig.savefig(str(plot_path), dpi=200)
         plt.close(fig)
@@ -249,6 +279,7 @@ def main() -> None:
             "video": str(video_path),
             "num_frames": int(frames.shape[0]),
             "sampled_times_seconds": frame_times.tolist(),
+            "plot_times_seconds": plot_times.tolist(),
             "model_path": args.model_path,
             "out_rewards": str(out_path),
             "out_success_probs": str(success_path),
