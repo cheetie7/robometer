@@ -20,8 +20,8 @@ from robometer.utils.save import load_model_from_hf
 from robometer.utils.setup_utils import setup_batch_collator
 
 
-def extract_uniform_frames(video_path: str, num_frames: int) -> np.ndarray:
-    """Extract exactly num_frames uniformly across a video, repeating indices for very short videos."""
+def extract_uniform_frames(video_path: str, num_frames: int) -> tuple[np.ndarray, np.ndarray]:
+    """Extract exactly num_frames uniformly across a video and return sampled seconds."""
     vr = decord.VideoReader(video_path, num_threads=1)
     total_frames = len(vr)
     if total_frames <= 0:
@@ -29,8 +29,16 @@ def extract_uniform_frames(video_path: str, num_frames: int) -> np.ndarray:
 
     frame_indices = np.linspace(0, total_frames - 1, int(num_frames), dtype=int).tolist()
     frames_array = vr.get_batch(frame_indices).asnumpy()
+    try:
+        native_fps = float(vr.get_avg_fps())
+    except Exception:
+        native_fps = 0.0
+    if native_fps > 0:
+        frame_times = np.asarray(frame_indices, dtype=np.float32) / native_fps
+    else:
+        frame_times = np.arange(len(frame_indices), dtype=np.float32)
     del vr
-    return frames_array
+    return frames_array, frame_times
 
 
 def batch_process_videos(video_dir: str, model_path: str, default_task: str):
@@ -56,10 +64,11 @@ def load_frames_input(
     *,
     fps: float = 1.0,
     max_frames: int = 20,
-) -> np.ndarray:
-    """Load frames from a video path/URL or .npy/.npz file. Returns uint8 (T, H, W, C)."""
+) -> tuple[np.ndarray, np.ndarray]:
+    """Load frames and x-axis times. Returns uint8 (T, H, W, C) and seconds/indices."""
     if video_or_array_path.endswith(".npy"):
         frames_array = np.load(video_or_array_path)
+        frame_times = np.arange(frames_array.shape[0], dtype=np.float32)
     elif video_or_array_path.endswith(".npz"):
         with np.load(video_or_array_path, allow_pickle=False) as npz:
             if "frames" in npz:
@@ -68,8 +77,9 @@ def load_frames_input(
                 frames_array = npz["arr_0"].copy()
             else:
                 frames_array = next(iter(npz.values())).copy()
+        frame_times = np.arange(frames_array.shape[0], dtype=np.float32)
     else:
-        frames_array = extract_uniform_frames(video_or_array_path, num_frames=max_frames)
+        frames_array, frame_times = extract_uniform_frames(video_or_array_path, num_frames=max_frames)
         if frames_array is None or frames_array.size == 0:
             raise RuntimeError("Could not extract frames from video.")
 
@@ -77,7 +87,7 @@ def load_frames_input(
         frames_array = np.clip(frames_array, 0, 255).astype(np.uint8)
     if frames_array.ndim == 4 and frames_array.shape[1] in (1, 3) and frames_array.shape[-1] not in (1, 3):
         frames_array = frames_array.transpose(0, 2, 3, 1)
-    return frames_array
+    return frames_array, frame_times
 
 
 def compute_rewards_per_frame_local(
@@ -169,7 +179,7 @@ def main() -> None:
     parser.add_argument("--model-path", required=True, help="HuggingFace model id or local checkpoint path")
     
     parser.add_argument("--task", required=True, help="Task instruction for the trajectory")
-    parser.add_argument("--fps", type=float, default=1.0, help="FPS when sampling from video (default: 1.0)")
+    parser.add_argument("--fps", type=float, default=1.0, help="Unused for video input; frames are sampled uniformly")
     parser.add_argument("--max-frames", type=int, default=20, help="Max frames to extract from video (default: 20)")
     parser.add_argument(
         "--success-threshold",
@@ -198,7 +208,7 @@ def main() -> None:
     reward_model.eval()
     for idx,video in enumerate(video_files,start=1):
         out_path = Path(args.out) if args.out is not None else video.with_name(video.stem + "_rewards.npy")
-        frames = load_frames_input(
+        frames, frame_times = load_frames_input(
         str(video),
         fps=float(args.fps),
         max_frames=int(args.max_frames),
@@ -227,6 +237,8 @@ def main() -> None:
             success_binary=success_binary,
             success_probs=success_probs if show_success else None,
             success_labels=None,
+            x_values=frame_times[: rewards.size],
+            x_label="Video time (s)",
             title=f"Progress/Success — {video_path.name}",
         )
         plot_path = out_path.with_name(out_path.stem + "_progress_success.png")
@@ -236,6 +248,7 @@ def main() -> None:
         summary = {
             "video": str(video_path),
             "num_frames": int(frames.shape[0]),
+            "sampled_times_seconds": frame_times.tolist(),
             "model_path": args.model_path,
             "out_rewards": str(out_path),
             "out_success_probs": str(success_path),
