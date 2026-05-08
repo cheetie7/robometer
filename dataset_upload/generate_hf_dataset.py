@@ -1049,6 +1049,15 @@ def main(cfg: GenerateConfig):
             max_trajectories=cfg.output.max_trajectories,
         )
         trajectories = flatten_task_data(task_data)
+    elif "bimanual_insertion" in cfg.dataset.dataset_name.lower():
+        from dataset_upload.dataset_loaders.bimanual_insertion_loader import load_bimanual_insertion_dataset
+
+        print(f"Loading bimanual insertion dataset from: {cfg.dataset.dataset_path}")
+        task_data = load_bimanual_insertion_dataset(
+            cfg.dataset.dataset_path,
+            max_trajectories=cfg.output.max_trajectories,
+        )
+        trajectories = flatten_task_data(task_data)
     else:
         raise ValueError(f"Unknown dataset type: {cfg.dataset.dataset_name}")
 

@@ -1,0 +1,18 @@
+# Local bimanual shaft-hole insertion HDF5 episodes.
+dataset:
+  dataset_path: ./data
+  dataset_name: bimanual_insertion
+
+output:
+  output_dir: ./robometer_dataset/bimanual_insertion
+  max_trajectories: null
+  max_frames: 32
+  shortest_edge_size: 240
+  use_video: true
+  fps: 10
+  center_crop: false
+  num_workers: 0
+
+hub:
+  push_to_hub: false
+  hub_repo_id: bimanual_insertion_rbm
