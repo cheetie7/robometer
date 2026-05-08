@@ -23,7 +23,7 @@ from sentence_transformers import SentenceTransformer
 from transformers import AutoModel, AutoImageProcessor
 from PIL import Image
 
-from datasets import Dataset, DatasetDict, Video, load_dataset
+from datasets import Dataset, DatasetDict, Video, load_dataset, load_from_disk
 from robometer.utils.distributed import rank_0_print
 from robometer.utils.embedding_utils import compute_video_embeddings, compute_text_embeddings
 
@@ -898,6 +898,32 @@ class DatasetPreprocessor:
             return dataset
         else:
             # Load from local disk
+            if os.path.exists(os.path.join(dataset_path, "state.json")):
+                dataset = load_from_disk(dataset_path)
+
+                def patch_local_path(old_path):
+                    if os.path.isabs(old_path):
+                        return old_path
+                    if os.path.exists(old_path):
+                        return os.path.abspath(old_path)
+
+                    # Local save_to_disk datasets commonly store video paths relative
+                    # to either the repo working directory or the converted dataset root.
+                    dataset_root = os.path.dirname(os.path.abspath(dataset_path))
+                    candidate = os.path.join(dataset_root, old_path)
+                    if os.path.exists(candidate):
+                        return os.path.abspath(candidate)
+
+                    return os.path.abspath(old_path)
+
+                dataset = dataset.map(
+                    lambda x: {
+                        "frames_video": patch_local_path(x["frames"]),
+                        "frames_path": patch_local_path(x["frames"]),
+                    }
+                )
+                return dataset
+
             dataset = load_dataset(dataset_path)
             return dataset
 
