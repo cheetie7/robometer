@@ -21,8 +21,8 @@ from robometer.utils.save import load_model_from_hf
 from robometer.utils.setup_utils import setup_batch_collator
 
 
-def extract_uniform_frames(video_path: str, num_frames: int) -> tuple[np.ndarray, np.ndarray]:
-    """Extract exactly num_frames uniformly across a video and return sampled seconds."""
+def extract_uniform_frames(video_path: str, num_frames: int) -> tuple[np.ndarray, np.ndarray, list[int]]:
+    """Extract exactly num_frames uniformly across a video and return sampled seconds/indices."""
     vr = decord.VideoReader(video_path, num_threads=1)
     total_frames = len(vr)
     if total_frames <= 0:
@@ -39,7 +39,7 @@ def extract_uniform_frames(video_path: str, num_frames: int) -> tuple[np.ndarray
     else:
         frame_times = np.arange(len(frame_indices), dtype=np.float32)
     del vr
-    return frames_array, frame_times
+    return frames_array, frame_times, frame_indices
 
 
 def batch_process_videos(video_dir: str, model_path: str, default_task: str):
@@ -65,11 +65,12 @@ def load_frames_input(
     *,
     fps: float = 1.0,
     max_frames: int = 20,
-) -> tuple[np.ndarray, np.ndarray]:
-    """Load frames and x-axis times. Returns uint8 (T, H, W, C) and seconds/indices."""
+) -> tuple[np.ndarray, np.ndarray, list[int]]:
+    """Load frames and x-axis times. Returns uint8 (T, H, W, C), seconds, and source frame indices."""
     if video_or_array_path.endswith(".npy"):
         frames_array = np.load(video_or_array_path)
         frame_times = np.arange(frames_array.shape[0], dtype=np.float32)
+        frame_indices = list(range(frames_array.shape[0]))
     elif video_or_array_path.endswith(".npz"):
         with np.load(video_or_array_path, allow_pickle=False) as npz:
             if "frames" in npz:
@@ -79,8 +80,9 @@ def load_frames_input(
             else:
                 frames_array = next(iter(npz.values())).copy()
         frame_times = np.arange(frames_array.shape[0], dtype=np.float32)
+        frame_indices = list(range(frames_array.shape[0]))
     else:
-        frames_array, frame_times = extract_uniform_frames(video_or_array_path, num_frames=max_frames)
+        frames_array, frame_times, frame_indices = extract_uniform_frames(video_or_array_path, num_frames=max_frames)
         if frames_array is None or frames_array.size == 0:
             raise RuntimeError("Could not extract frames from video.")
 
@@ -88,7 +90,7 @@ def load_frames_input(
         frames_array = np.clip(frames_array, 0, 255).astype(np.uint8)
     if frames_array.ndim == 4 and frames_array.shape[1] in (1, 3) and frames_array.shape[-1] not in (1, 3):
         frames_array = frames_array.transpose(0, 2, 3, 1)
-    return frames_array, frame_times
+    return frames_array, frame_times, frame_indices
 
 
 def compute_rewards_per_frame_local(
@@ -220,6 +222,7 @@ def main() -> None:
     parser.add_argument("--out", default=None, help="Output path for rewards .npy (default: <video_stem>_rewards.npy)")
     parser.add_argument("--video_dir",required=True)
     args = parser.parse_args()
+    print(f"[extract_reward] effective max_frames={int(args.max_frames)}")
 
     
     video_path=Path(args.video_dir)
@@ -238,10 +241,14 @@ def main() -> None:
     reward_model.eval()
     for idx,video in enumerate(video_files,start=1):
         out_path = Path(args.out) if args.out is not None else video.with_name(video.stem + "_rewards.npy")
-        frames, frame_times = load_frames_input(
+        frames, frame_times, frame_indices = load_frames_input(
         str(video),
         fps=float(args.fps),
         max_frames=int(args.max_frames),
+        )
+        print(
+            f"[extract_reward] video={video.name} sampled_input_frames={int(frames.shape[0])} "
+            f"sampled_frame_indices={frame_indices}"
         )
 
         rewards, success_probs = compute_rewards_per_frame_local(
@@ -262,6 +269,10 @@ def main() -> None:
         show_success = success_probs.size > 0 and success_probs.size == rewards.size
         success_binary = (success_probs > float(args.success_threshold)).astype(np.int32) if show_success else None
         plot_times = align_times_to_predictions(frame_times, rewards.size)
+        print(
+            f"[extract_reward] video={video.name} reward_count={int(rewards.size)} "
+            f"success_count={int(success_probs.size)}"
+        )
         fig = create_combined_progress_success_plot(
             progress_pred=rewards,
             num_frames=int(frames.shape[0]),
@@ -278,6 +289,8 @@ def main() -> None:
         summary = {
             "video": str(video_path),
             "num_frames": int(frames.shape[0]),
+            "reward_count": int(rewards.size),
+            "sampled_frame_indices": frame_indices,
             "sampled_times_seconds": frame_times.tolist(),
             "plot_times_seconds": plot_times.tolist(),
             "model_path": args.model_path,
