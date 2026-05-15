@@ -6,6 +6,7 @@ from pathlib import Path
 import argparse
 import decord
 import json
+import time
 from pathlib import Path
 from typing import Optional, Tuple
 
@@ -19,6 +20,9 @@ from robometer.evals.eval_server import compute_batch_outputs
 from robometer.evals.eval_viz_utils import create_combined_progress_success_plot
 from robometer.utils.save import load_model_from_hf
 from robometer.utils.setup_utils import setup_batch_collator
+
+
+DEFAULT_MAX_FRAMES = 8
 
 
 def extract_uniform_frames(video_path: str, num_frames: int) -> tuple[np.ndarray, np.ndarray, list[int]]:
@@ -64,7 +68,7 @@ def load_frames_input(
     video_or_array_path: str,
     *,
     fps: float = 1.0,
-    max_frames: int = 20,
+    max_frames: int = DEFAULT_MAX_FRAMES,
 ) -> tuple[np.ndarray, np.ndarray, list[int]]:
     """Load frames and x-axis times. Returns uint8 (T, H, W, C), seconds, and source frame indices."""
     if video_or_array_path.endswith(".npy"):
@@ -202,6 +206,12 @@ def set_plot_x_axis_to_seconds(fig, x_values: np.ndarray) -> None:
         ax.autoscale_view(scalex=False, scaley=True)
 
 
+def synchronize_if_cuda(device) -> None:
+    """Synchronize CUDA work before/after timing when inference runs on GPU."""
+    if torch.cuda.is_available() and str(device).startswith("cuda"):
+        torch.cuda.synchronize()
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(
         description="Run RBM inference locally: load model from HuggingFace and compute per-frame progress and success.",
@@ -212,7 +222,12 @@ def main() -> None:
     
     parser.add_argument("--task", required=True, help="Task instruction for the trajectory")
     parser.add_argument("--fps", type=float, default=1.0, help="Unused for video input; frames are sampled uniformly")
-    parser.add_argument("--max-frames", type=int, default=20, help="Max frames to extract from video (default: 20)")
+    parser.add_argument(
+        "--max-frames",
+        type=int,
+        default=DEFAULT_MAX_FRAMES,
+        help=f"Max frames to extract from video (default: {DEFAULT_MAX_FRAMES})",
+    )
     parser.add_argument(
         "--success-threshold",
         type=float,
@@ -222,7 +237,6 @@ def main() -> None:
     parser.add_argument("--out", default=None, help="Output path for rewards .npy (default: <video_stem>_rewards.npy)")
     parser.add_argument("--video_dir",required=True)
     args = parser.parse_args()
-    print(f"[extract_reward] effective max_frames={int(args.max_frames)}")
 
     
     video_path=Path(args.video_dir)
@@ -237,20 +251,25 @@ def main() -> None:
         model_path=model_path,
         device=device,
     )
-    configure_inference_frames(exp_config, reward_model, int(args.max_frames))
+    effective_max_frames = int(args.max_frames)
+    print(f"[extract_reward] effective max_frames={effective_max_frames}")
+    configure_inference_frames(exp_config, reward_model, effective_max_frames)
     reward_model.eval()
     for idx,video in enumerate(video_files,start=1):
         out_path = Path(args.out) if args.out is not None else video.with_name(video.stem + "_rewards.npy")
         frames, frame_times, frame_indices = load_frames_input(
         str(video),
         fps=float(args.fps),
-        max_frames=int(args.max_frames),
+        max_frames=effective_max_frames,
         )
         print(
             f"[extract_reward] video={video.name} sampled_input_frames={int(frames.shape[0])} "
             f"sampled_frame_indices={frame_indices}"
         )
 
+        inference_device = device
+        synchronize_if_cuda(inference_device)
+        trajectory_start_time = time.perf_counter()
         rewards, success_probs = compute_rewards_per_frame_local(
             reward_model=reward_model,
             processor=processor,
@@ -258,7 +277,12 @@ def main() -> None:
             exp_config=exp_config,
             video_frames=frames,
             task=args.task,
-            device='cuda'
+            device=inference_device
+        )
+        synchronize_if_cuda(inference_device)
+        trajectory_eval_seconds = time.perf_counter() - trajectory_start_time
+        seconds_per_progress_frame = (
+            trajectory_eval_seconds / int(frames.shape[0]) if int(frames.shape[0]) > 0 else None
         )
 
         out_path.parent.mkdir(parents=True, exist_ok=True)
@@ -272,6 +296,13 @@ def main() -> None:
         print(
             f"[extract_reward] video={video.name} reward_count={int(rewards.size)} "
             f"success_count={int(success_probs.size)}"
+        )
+        seconds_per_frame_text = (
+            f"{seconds_per_progress_frame:.6f}" if seconds_per_progress_frame is not None else "nan"
+        )
+        print(
+            f"[extract_reward] video={video.name} trajectory_eval_seconds={trajectory_eval_seconds:.6f} "
+            f"seconds_per_progress_frame={seconds_per_frame_text}"
         )
         fig = create_combined_progress_success_plot(
             progress_pred=rewards,
@@ -290,6 +321,8 @@ def main() -> None:
             "video": str(video_path),
             "num_frames": int(frames.shape[0]),
             "reward_count": int(rewards.size),
+            "trajectory_eval_seconds": trajectory_eval_seconds,
+            "seconds_per_progress_frame": seconds_per_progress_frame,
             "sampled_frame_indices": frame_indices,
             "sampled_times_seconds": frame_times.tolist(),
             "plot_times_seconds": plot_times.tolist(),
