@@ -1,0 +1,20 @@
+# Generic episode_*.hdf5 dataset configuration.
+# Override dataset_path and task_description from the command line as needed.
+dataset:
+  dataset_path: .
+  dataset_name: episode_hdf5
+  task_description: Move the two robotic arms together to insert the grasped red block into the blue block
+
+output:
+  output_dir: datasets/episode_hdf5_rbm
+  max_trajectories: -1
+  max_frames: 64
+  use_video: true
+  fps: 10
+  shortest_edge_size: 240
+  center_crop: false
+  num_workers: 1
+
+hub:
+  push_to_hub: false
+  hub_repo_id: episode_hdf5_rbm

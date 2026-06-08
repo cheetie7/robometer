@@ -898,6 +898,25 @@ class DatasetPreprocessor:
             return dataset
         else:
             # Load from local disk
+            dataset_info_path = os.path.join(dataset_path, "dataset_info.json")
+            state_path = os.path.join(dataset_path, "state.json")
+            if os.path.exists(dataset_info_path) and os.path.exists(state_path):
+                rank_0_print(f"Loading local Dataset.save_to_disk dataset: {dataset_path}")
+                dataset = Dataset.load_from_disk(dataset_path)
+
+                def patch_local_path(old_path):
+                    if not old_path or os.path.isabs(old_path):
+                        return old_path
+                    return os.path.normpath(os.path.join(os.path.dirname(dataset_path), old_path))
+
+                dataset = dataset.map(
+                    lambda x: {
+                        "frames_video": patch_local_path(x["frames"]),
+                        "frames_path": patch_local_path(x["frames"]),
+                    }
+                )
+                return dataset
+
             dataset = load_dataset(dataset_path)
             return dataset
 

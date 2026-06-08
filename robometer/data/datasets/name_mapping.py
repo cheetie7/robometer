@@ -93,4 +93,6 @@ DS_SHORT_NAME_MAPPING = {
     "abraranwar_usc_koch_rewind_rfm_usc_koch_rewind": "usc_koch_rewind",
     # RoboFAC
     "aliangdw_robofac_rbm_robofac": "robofac",
+    # Local episode_*.hdf5 fine-tuning
+    "datasets_episode_hdf5_rbm_episode_hdf5_episode_hdf5": "episode_hdf5",
 }

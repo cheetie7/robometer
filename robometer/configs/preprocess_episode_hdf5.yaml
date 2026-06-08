@@ -1,0 +1,26 @@
+# Preprocess the local dataset created by episode_hdf5.yaml.
+# Cache key produced for training:
+# datasets/episode_hdf5_rbm/episode_hdf5/episode_hdf5
+
+train_datasets:
+  - datasets/episode_hdf5_rbm/episode_hdf5
+train_subsets:
+  - ["episode_hdf5"]
+
+eval_datasets:
+  - datasets/episode_hdf5_rbm/episode_hdf5
+eval_subsets:
+  - ["episode_hdf5"]
+
+max_frames_for_preprocessing: 64
+video_frame_sampling: uniform
+num_proc: 1
+num_threads: 4
+force_reprocess: false
+cache_dir: processed_datasets
+
+precompute_embeddings: false
+embeddings_cache_dir: embeddings
+dinov2_model: facebook/dinov2-base
+sentence_model: sentence-transformers/all-MiniLM-L12-v2
+embedding_batch_size: 64

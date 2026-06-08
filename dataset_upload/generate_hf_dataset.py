@@ -105,6 +105,10 @@ class DatasetConfig:
     dataset_path: str = field(default="", metadata={"help": "Path to the dataset"})
     dataset_name: str = field(default=None, metadata={"help": "Name of the dataset (defaults to dataset_type)"})
     exclude_wrist_cam: bool = field(default=False, metadata={"help": "Exclude wrist camera views (MIT Franka only)"})
+    task_description: str = field(
+        default="complete the robot task",
+        metadata={"help": "Default task text for custom datasets that do not store language instructions"},
+    )
 
 
 @dataclass
@@ -417,7 +421,18 @@ def main(cfg: GenerateConfig):
             cfg.hub.hub_repo_id = username + "/" + cfg.hub.hub_repo_id
 
     # Import the appropriate dataset loader and trajectory creator
-    if "libero" in cfg.dataset.dataset_name:
+    if "episode_hdf5" in cfg.dataset.dataset_name.lower():
+        from dataset_upload.dataset_loaders.episode_hdf5_loader import load_episode_hdf5_dataset
+
+        print(f"Loading Episode HDF5 dataset from: {cfg.dataset.dataset_path}")
+        task_data = load_episode_hdf5_dataset(
+            dataset_path=cfg.dataset.dataset_path,
+            dataset_name=cfg.dataset.dataset_name,
+            task_description=cfg.dataset.task_description,
+            max_trajectories=cfg.output.max_trajectories,
+        )
+        trajectories = flatten_task_data(task_data)
+    elif "libero" in cfg.dataset.dataset_name:
         from dataset_upload.dataset_loaders.libero_loader import load_libero_dataset
 
         # Load the trajectories using the loader
